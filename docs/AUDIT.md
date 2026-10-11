@@ -85,6 +85,19 @@ fiction.
 one python3 spawn per app resolution. Fix: parallel probes with short
 budgets in one process (Go: goroutines, trivially).
 
+### 13. ensure never verified backend conformance (proven, then ADDRESSED)
+A CPU-started slot never self-healed to GPU: `ensure` checks aliveness
+only, so magpie's env-smuggled NGL=99 was a no-op on a healthy CPU slot —
+a full week of "slow server days" (4 tok/s, timeout catastrophe, 87-min
+passes) was just CPU, masked. ADDRESSED 2026-10-11 by per-creature
+`backend: cpu|gpu` (registry field, `menagerie backend <app> [cpu|gpu]`):
+gpu resolves the Vulkan wrapper or ERRORS (never silent CPU), NGL defaults
+to 99, children pass no GPU env. Verified live: clean restart with scrubbed
+env → Vulkan binary, -ngl 99, 103 tok/s sustained (vs 2–9 CPU).
+Deliberately NOT added: a tok/s tripwire in children — with gpu-or-error
+the whole failure class is structurally impossible; a warning would only
+nag CPU-only boxes. Revisit if Vulkan-present-but-broken is ever observed.
+
 ### 12. TUI imports the registry (proven by reading)
 `menagerie-tui.py` loads `menagerie-registry.py` as a module — the Go
 rewrite cannot keep it alive. TUI is rebuilt last (bubbletea), CLI frozen
