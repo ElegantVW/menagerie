@@ -98,7 +98,21 @@ Deliberately NOT added: a tok/s tripwire in children — with gpu-or-error
 the whole failure class is structurally impossible; a warning would only
 nag CPU-only boxes. Revisit if Vulkan-present-but-broken is ever observed.
 
-### 12. TUI imports the registry (proven by reading)
+### 14. No VRAM awareness; preemption by hope (proven, ADDRESSED v1)
+Two gpu mouths, one 8GB card, no accounting: a second load OOMs (or the
+server fails mid-load) with no message. ADDRESSED 2026-10-11 in the live
+steward: sysfs VRAM sensor (AMD, no daemon), per-model vram_gb (seeded
+file_size x 1.6, measured within 10%), `gpu_arbitrate` in ensure —
+priority pixie > magpie, park-lower (graceful stop) or bounded announced
+wait, refuse with cause past deadline. Verified live both directions
+(preempt + wait + recover + single-page magpie run in 5.8s).
+v2 (Go supervisor): measured per-slot costs, VRAM budget mirroring the
+RAM one, slot-state-aware preemption (unload *between* generations).
+REQUIREMENT for the provisioner: engine builds must expose POST /unload
+(absent in 0.6.0-dev b1/51ce9c1 — pause currently means graceful stop,
+and magpie's retry absorbs the lost entry).
+
+### 15. TUI imports the registry (proven by reading)
 `menagerie-tui.py` loads `menagerie-registry.py` as a module — the Go
 rewrite cannot keep it alive. TUI is rebuilt last (bubbletea), CLI frozen
 throughout so the old TUI keeps working against the OLD core until cutover.
