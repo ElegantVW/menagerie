@@ -28,10 +28,13 @@ type ModelEntry struct {
 }
 
 type AppEntry struct {
-	Model string `json:"model"`
-	Port  int    `json:"port"`
-	Ctx   int    `json:"ctx"`
-	Alias string `json:"alias"`
+	Model   string `json:"model"`
+	Port    int    `json:"port"`
+	Ctx     int    `json:"ctx"`
+	Alias   string `json:"alias"`
+	// Backend is cpu|gpu (registry backfills cpu). gpu = Vulkan server +
+	// full offload, resolved by the steward — children pass no GPU env.
+	Backend string `json:"backend"`
 }
 
 func DefaultPath() string {
