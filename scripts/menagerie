@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# menagerie — thin launcher (never a prebuilt ELF in git)
+# Discovery: MENAGERIE_BIN → ~/.local/lib/faeos/menagerie → sibling tree
+set -euo pipefail
+
+USER_HOME="${HOME}"
+if [[ -n "${SUDO_USER:-}" ]]; then
+  USER_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+  USER_HOME="${USER_HOME:-$HOME}"
+fi
+
+CANDIDATES=(
+  "${MENAGERIE_BIN:-}"
+  "$USER_HOME/.local/lib/faeos/menagerie"
+  /usr/local/lib/faeos/menagerie
+  "$USER_HOME/menagerie/target/release/menagerie"
+)
+here="$(cd "$(dirname "$0")" && pwd)"
+if [[ -x "$here/../target/release/menagerie" ]]; then
+  CANDIDATES+=("$here/../target/release/menagerie")
+fi
+
+for c in "${CANDIDATES[@]}"; do
+  [[ -n "$c" && -x "$c" ]] || continue
+  exec "$c" "$@"
+done
+
+echo "menagerie: engine not built yet." >&2
+echo "  next:  cd ~/menagerie && ./build.sh install --house" >&2
+exit 127

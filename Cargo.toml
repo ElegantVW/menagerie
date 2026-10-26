@@ -1,0 +1,23 @@
+[package]
+name = "menagerie"
+version = "0.1.0"
+edition = "2021"
+description = "faeOS AI steward — per-app loopback mouths, RAM/VRAM budget"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "menagerie"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
