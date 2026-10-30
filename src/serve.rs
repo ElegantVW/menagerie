@@ -37,6 +37,8 @@ pub struct Mouth {
     pub model_name: String,
     pub vram_gb: Option<f64>,
     pub size: i64,
+    pub kind: crate::config::ModelKind,
+    pub mmproj: Option<String>,
 }
 
 impl Mouth {
@@ -53,6 +55,8 @@ impl Mouth {
             model_name: entry.model.clone(),
             vram_gb: model.vram_gb,
             size: model.size,
+            kind: model.kind,
+            mmproj: model.mmproj.clone(),
         })
     }
 
@@ -63,11 +67,7 @@ impl Mouth {
 
 pub fn health(port: u16) -> Option<u16> {
     let addr = format!("{HOST}:{port}");
-    let mut s = TcpStream::connect_timeout(
-        &addr.parse().ok()?,
-        Duration::from_secs(2),
-    )
-    .ok()?;
+    let mut s = TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_secs(2)).ok()?;
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
     let req = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     s.write_all(req.as_bytes()).ok()?;
@@ -83,7 +83,8 @@ pub fn health(port: u16) -> Option<u16> {
 }
 
 pub fn ours_running(mouth: &Mouth) -> bool {
-    let Some(id) = slot::load_identity(&paths::pid_file(&mouth.app), &paths::stamp_file(&mouth.app))
+    let Some(id) =
+        slot::load_identity(&paths::pid_file(&mouth.app), &paths::stamp_file(&mouth.app))
     else {
         return false;
     };
@@ -96,13 +97,16 @@ pub fn port_held_by_stranger(mouth: &Mouth) -> bool {
 
 pub fn ensure(reg: &Registry, name: &str) -> Result<String> {
     let mouth = Mouth::from_reg(reg, name)?;
+    refuse_non_llama(reg, &mouth)?;
     let _lk = dir_lock()?;
     if ours_running(&mouth) {
         match health(mouth.entry.port) {
             Some(200) => {
                 return Ok(format!(
                     "menagerie [{}] ready at {} (model: {})",
-                    mouth.app, mouth.url(), mouth.model_name
+                    mouth.app,
+                    mouth.url(),
+                    mouth.model_name
                 ));
             }
             Some(503) => {
@@ -127,8 +131,25 @@ pub fn ensure(reg: &Registry, name: &str) -> Result<String> {
 
 pub fn start(reg: &Registry, name: &str) -> Result<String> {
     let mouth = Mouth::from_reg(reg, name)?;
+    refuse_non_llama(reg, &mouth)?;
     let _lk = dir_lock()?;
     start_locked(&mouth)
+}
+
+fn refuse_non_llama(reg: &Registry, mouth: &Mouth) -> Result<()> {
+    let kind = reg
+        .models
+        .get(&mouth.model_name)
+        .map(|m| m.kind)
+        .unwrap_or(crate::config::ModelKind::Llm);
+    if !kind.is_llama() {
+        bail!(
+            "{} is kind {} — not a llama-server mouth (sd-cli / tts stay guests)",
+            mouth.model_name,
+            kind.as_str()
+        );
+    }
+    Ok(())
 }
 
 fn start_locked(mouth: &Mouth) -> Result<String> {
@@ -149,15 +170,36 @@ fn start_locked(mouth: &Mouth) -> Result<String> {
         bail!("model file missing: {}", mouth.model_path.display());
     }
     let server = backend::find_server(&mouth.entry.backend)?;
+    let vision = mouth.kind == crate::config::ModelKind::Vision;
+    let mmproj = if vision {
+        let found = backend::find_mmproj(&mouth.model_path, mouth.mmproj.as_deref());
+        if found.is_none() {
+            bail!(
+                "vision model has no mmproj on disk next to {}",
+                mouth.model_path.display()
+            );
+        }
+        found
+    } else {
+        None
+    };
+    let ctx = if vision {
+        4096
+    } else {
+        mouth.entry.ctx
+    };
     let spec = SpawnSpec {
         app: mouth.app.clone(),
         model: mouth.model_path.clone(),
         host: HOST.into(),
         port: mouth.entry.port,
-        ctx: mouth.entry.ctx,
+        ctx,
         threads: threads(),
         threads_batch: threads_batch(),
-        ngl: if mouth.entry.backend == "gpu" { 99 } else { 0 },
+        ngl: mouth
+            .entry
+            .ngl
+            .unwrap_or(if mouth.entry.backend == "gpu" { 99 } else { 0 }),
         alias: if mouth.entry.alias.is_empty() {
             mouth.app.clone()
         } else {
@@ -166,6 +208,7 @@ fn start_locked(mouth: &Mouth) -> Result<String> {
         sleep_idle: env_u32("PIXIE_LLM_SLEEP_IDLE", 300) as i64,
         seed: mouth.entry.seed.unwrap_or(1),
         backend: mouth.entry.backend.clone(),
+        mmproj,
     };
     let argv = backend::llama_argv(&server, &spec);
     rotate_log(&paths::log_file(&mouth.app))?;
@@ -221,7 +264,8 @@ pub fn stop(reg: &Registry, name: &str) -> Result<String> {
 }
 
 fn stop_unlocked(mouth: &Mouth) -> Result<String> {
-    let Some(id) = slot::load_identity(&paths::pid_file(&mouth.app), &paths::stamp_file(&mouth.app))
+    let Some(id) =
+        slot::load_identity(&paths::pid_file(&mouth.app), &paths::stamp_file(&mouth.app))
     else {
         return Ok(format!("menagerie [{}] already stopped", mouth.app));
     };
@@ -306,7 +350,10 @@ fn gpu_arbitrate(reg: &Registry, mouth: &Mouth) -> Result<()> {
     let need = match mouth.vram_gb {
         Some(n) => n,
         None => {
-            eprintln!("warning: no VRAM cost for {} — proceeding blind", mouth.model_name);
+            eprintln!(
+                "warning: no VRAM cost for {} — proceeding blind",
+                mouth.model_name
+            );
             return Ok(());
         }
     };
@@ -348,9 +395,7 @@ fn gpu_arbitrate(reg: &Registry, mouth: &Mouth) -> Result<()> {
             }
         }
     }
-    bail!(
-        "VRAM short ({free:.1} GB free, need {need:.1}) — stop something and retry"
-    )
+    bail!("VRAM short ({free:.1} GB free, need {need:.1}) — stop something and retry")
 }
 
 fn rotate_log(path: &Path) -> Result<()> {
@@ -382,7 +427,12 @@ fn dir_lock() -> Result<DirLock> {
 
 impl Drop for DirLock {
     fn drop(&mut self) {
-        unsafe { libc::flock(std::os::unix::io::AsRawFd::as_raw_fd(&self.0), libc::LOCK_UN) };
+        unsafe {
+            libc::flock(
+                std::os::unix::io::AsRawFd::as_raw_fd(&self.0),
+                libc::LOCK_UN,
+            )
+        };
     }
 }
 
@@ -401,13 +451,58 @@ mod tests {
                 alias: "qwen".into(),
                 backend: "cpu".into(),
                 seed: None,
+                slots: Default::default(),
+                ngl: None,
             },
             model_path: "/nope".into(),
             model_name: "m".into(),
             vram_gb: None,
             size: 1,
+            kind: crate::config::ModelKind::Llm,
+            mmproj: None,
         };
         // port 1 is not a llama mouth; stranger check is false unless something listens
         let _ = port_held_by_stranger(&m);
+    }
+
+    #[test]
+    fn image_kind_is_not_spawned() {
+        use crate::config::{AppEntry, ModelEntry, ModelKind, Registry};
+        use std::collections::BTreeMap;
+        let mut models = BTreeMap::new();
+        models.insert(
+            "pony".into(),
+            ModelEntry {
+                path: "/m/pony.gguf".into(),
+                size: 1,
+                vram_gb: Some(6.0),
+                kind: ModelKind::Image,
+                mmproj: None,
+            },
+        );
+        let mut apps = BTreeMap::new();
+        apps.insert(
+            "imp".into(),
+            AppEntry {
+                model: "pony".into(),
+                port: 8082,
+                ctx: 4096,
+                alias: "imp".into(),
+                backend: "gpu".into(),
+                seed: None,
+                slots: BTreeMap::new(),
+                ngl: None,
+            },
+        );
+        let reg = Registry {
+            version: 1,
+            ram_budget_gb: 60.0,
+            budget_seen: true,
+            models,
+            apps,
+        };
+        let err = ensure(&reg, "imp").unwrap_err().to_string();
+        assert!(err.contains("image"), "{err}");
+        assert!(!err.contains("spawn"), "{err}");
     }
 }

@@ -21,7 +21,11 @@ cargo test
 menagerie ensure pixie
 menagerie status all
 menagerie stop pixie
+menagerie set pixie code Qwen2.5-Coder-3B-Instruct-abliterated-Q4_K_M
+menagerie slots pixie
 ```
+
+Models have a `kind` (`llm` / `vision` / `image` / `tts`). `ensure` will not spawn llama-server for image or tts. Imp's image hand is sd-cli; the slot only stores the path. Vision mouths pass `--mmproj` (registry field or a `*mmproj*.gguf` sibling); missing projector fails loud. Eye ctx is 4096. One GPU tenant: hop parks the resident mouth first. `ensure pixie --slot vision` then `--slot chat` restores the 8B.
 
 ## Laws
 

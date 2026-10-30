@@ -18,17 +18,23 @@ pub struct SpawnSpec {
     pub sleep_idle: i64,
     pub seed: i64,
     pub backend: String,
+    pub mmproj: Option<PathBuf>,
 }
 
 impl SpawnSpec {
     pub fn ngl_for_backend(&self) -> u32 {
-        if self.backend == "gpu" {
-            if std::env::var("PIXIE_LLM_NGL").ok().filter(|s| !s.is_empty()).is_some() {
-                return self.ngl;
+        if self.backend != "gpu" {
+            return 0;
+        }
+        if let Ok(s) = std::env::var("PIXIE_LLM_NGL") {
+            if let Ok(n) = s.parse::<u32>() {
+                return n;
             }
-            99
-        } else {
+        }
+        if self.ngl > 0 {
             self.ngl
+        } else {
+            99
         }
     }
 }
@@ -83,7 +89,7 @@ pub fn llama_argv(server: &Path, spec: &SpawnSpec) -> Vec<String> {
     } else {
         spec.sleep_idle
     };
-    vec![
+    let mut a = vec![
         server.display().to_string(),
         "-m".into(),
         spec.model.display().to_string(),
@@ -107,7 +113,46 @@ pub fn llama_argv(server: &Path, spec: &SpawnSpec) -> Vec<String> {
         spec.seed.to_string(),
         "--timeout".into(),
         "300".into(),
-    ]
+    ];
+    if let Some(mm) = &spec.mmproj {
+        a.push("--mmproj".into());
+        a.push(mm.display().to_string());
+    }
+    a
+}
+
+pub fn find_mmproj(model: &Path, explicit: Option<&str>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let dir = model.parent()?;
+    let stem = model.file_stem()?.to_string_lossy().to_lowercase();
+    let mut hits: Vec<PathBuf> = Vec::new();
+    let rd = std::fs::read_dir(dir).ok()?;
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = p.file_name()?.to_string_lossy().to_lowercase();
+        if name.contains("mmproj") && name.ends_with(".gguf") && p.is_file() {
+            hits.push(p);
+        }
+    }
+    if hits.is_empty() {
+        return None;
+    }
+    hits.sort_by_key(|p| {
+        let n = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        let related = if n.contains(&stem.chars().take(12).collect::<String>()) {
+            0
+        } else {
+            1
+        };
+        let f16 = if n.contains("f16") { 0 } else { 1 };
+        (related, f16, n)
+    });
+    hits.into_iter().next()
 }
 
 pub fn house_runner_stub() -> Result<PathBuf> {
@@ -132,6 +177,7 @@ mod tests {
             sleep_idle: 300,
             seed: 7,
             backend: "cpu".into(),
+            mmproj: None,
         }
     }
 
@@ -156,6 +202,17 @@ mod tests {
     }
 
     #[test]
+    fn gpu_honors_split_ngl() {
+        let mut s = spec();
+        s.backend = "gpu".into();
+        s.ngl = 24;
+        assert_eq!(s.ngl_for_backend(), 24);
+        let a = llama_argv(Path::new("/vk"), &s);
+        let i = a.iter().position(|x| x == "-ngl").unwrap();
+        assert_eq!(a[i + 1], "24");
+    }
+
+    #[test]
     fn gpu_missing_vulkan_errors() {
         std::env::remove_var("PIXIE_LLAMA_SERVER");
         let vk = crate::paths::home().join(".local/lib/llama-vulkan/llama-server-vk");
@@ -172,5 +229,39 @@ mod tests {
     #[test]
     fn house_runner_not_this_cut() {
         assert!(house_runner_stub().is_err());
+    }
+
+    #[test]
+    fn argv_omits_mmproj_when_unset() {
+        let a = llama_argv(Path::new("/bin/llama-server"), &spec());
+        assert!(!a.contains(&"--mmproj".into()), "{a:?}");
+    }
+
+    #[test]
+    fn argv_has_mmproj_when_set() {
+        let mut s = spec();
+        s.mmproj = Some(PathBuf::from("/m/eye.mmproj-f16.gguf"));
+        let a = llama_argv(Path::new("/bin/llama-server"), &s);
+        let i = a.iter().position(|x| x == "--mmproj").expect("mmproj");
+        assert_eq!(a[i + 1], "/m/eye.mmproj-f16.gguf");
+    }
+
+    #[test]
+    fn find_mmproj_picks_f16_sibling() {
+        let dir = std::env::temp_dir().join(format!("men-mmproj-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let model = dir.join("Qwen2.5-VL-7B.gguf");
+        let mm = dir.join("Qwen2.5-VL-7B.mmproj-f16.gguf");
+        std::fs::write(&model, b"x").unwrap();
+        std::fs::write(&mm, b"y").unwrap();
+        let hit = find_mmproj(&model, None).unwrap();
+        assert_eq!(hit, mm);
+        let explicit = dir.join("explicit.mmproj.gguf");
+        std::fs::write(&explicit, b"z").unwrap();
+        assert_eq!(
+            find_mmproj(&model, Some(explicit.to_str().unwrap())).unwrap(),
+            explicit
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
