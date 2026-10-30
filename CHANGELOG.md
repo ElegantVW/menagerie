@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `ensure` restarts the guest when the live cmdline `-m` path is not the registry model. `set` then `ensure` while another GGUF is already healthy used to report ready and keep serving the old weights. VRAM short is a real load refusal (`gpu_arbitrate` bails; llama-server is not started).
 - Vision mouths pass `--mmproj` (registry field or a `*mmproj*.gguf` sibling). `ensure --slot vision` binds the VL GGUF. Eye ctx is 4096. Missing projector fails loud.
 - Models have `kind`: llm | vision | image | tts. `ensure` refuses image/tts (sd-cli stays the Imp hand).
 - Apps have `slots` (pixie chat/code/vision, imp llm/image, kur llm) and optional `ngl` for RAM/VRAM split.

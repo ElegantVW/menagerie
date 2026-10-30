@@ -95,13 +95,23 @@ pub fn port_held_by_stranger(mouth: &Mouth) -> bool {
     crate::netport::listening(mouth.entry.port) && !ours_running(mouth)
 }
 
+fn serving_wanted_model(mouth: &Mouth) -> bool {
+    let Some(id) =
+        slot::load_identity(&paths::pid_file(&mouth.app), &paths::stamp_file(&mouth.app))
+    else {
+        return false;
+    };
+    slot::cmdline_has_model(&slot::default_proc(), id.pid, &mouth.model_path)
+}
+
 pub fn ensure(reg: &Registry, name: &str) -> Result<String> {
     let mouth = Mouth::from_reg(reg, name)?;
     refuse_non_llama(reg, &mouth)?;
     let _lk = dir_lock()?;
     if ours_running(&mouth) {
+        let wanted = serving_wanted_model(&mouth);
         match health(mouth.entry.port) {
-            Some(200) => {
+            Some(200) if wanted => {
                 return Ok(format!(
                     "menagerie [{}] ready at {} (model: {})",
                     mouth.app,
@@ -109,7 +119,7 @@ pub fn ensure(reg: &Registry, name: &str) -> Result<String> {
                     mouth.model_name
                 ));
             }
-            Some(503) => {
+            Some(503) if wanted => {
                 if mouth.entry.backend == "gpu" {
                     gpu_arbitrate(reg, &mouth)?;
                 }
@@ -118,6 +128,10 @@ pub fn ensure(reg: &Registry, name: &str) -> Result<String> {
                     mouth.app,
                     mouth.url()
                 ));
+            }
+            Some(200) | Some(503) => {
+                // Registry model is not the live guest (set-then-ensure used to lie).
+                let _ = stop_unlocked(&mouth);
             }
             _ => {}
         }
@@ -154,11 +168,14 @@ fn refuse_non_llama(reg: &Registry, mouth: &Mouth) -> Result<()> {
 
 fn start_locked(mouth: &Mouth) -> Result<String> {
     if ours_running(mouth) && health(mouth.entry.port) == Some(200) {
-        return Ok(format!(
-            "menagerie [{}] already running at {}",
-            mouth.app,
-            mouth.url()
-        ));
+        if serving_wanted_model(mouth) {
+            return Ok(format!(
+                "menagerie [{}] already running at {}",
+                mouth.app,
+                mouth.url()
+            ));
+        }
+        let _ = stop_unlocked(mouth);
     }
     if port_held_by_stranger(mouth) {
         bail!(
@@ -298,8 +315,8 @@ pub fn status_line(reg: &Registry, name: &str) -> String {
         Ok(m) => {
             let st = if ours_running(&m) {
                 match health(m.entry.port) {
-                    Some(200) => "up",
-                    Some(503) => "asleep",
+                    Some(200) if serving_wanted_model(&m) => "up",
+                    Some(503) if serving_wanted_model(&m) => "asleep",
                     _ => "stale",
                 }
             } else if crate::netport::listening(m.entry.port) {

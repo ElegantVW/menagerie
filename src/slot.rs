@@ -45,6 +45,20 @@ pub fn cmdline_ours(proc_root: &Path, pid: u32, port: u16) -> bool {
     has_bin && has_port
 }
 
+/// True when the live guest argv includes this GGUF path (`-m`).
+pub fn cmdline_has_model(proc_root: &Path, pid: u32, model: &Path) -> bool {
+    let raw = fs::read(proc_root.join(pid.to_string()).join("cmdline")).unwrap_or_default();
+    cmdline_bytes_have_model(&raw, model)
+}
+
+pub fn cmdline_bytes_have_model(raw: &[u8], model: &Path) -> bool {
+    let want = model.as_os_str().as_encoded_bytes();
+    if want.is_empty() {
+        return false;
+    }
+    raw.split(|b| *b == 0).any(|arg| arg == want)
+}
+
 pub fn load_identity(pid_path: &Path, stamp_path: &Path) -> Option<Identity> {
     let pid: u32 = fs::read_to_string(pid_path).ok()?.trim().parse().ok()?;
     let starttime: u64 = fs::read_to_string(stamp_path).ok()?.trim().parse().ok()?;
@@ -165,5 +179,20 @@ mod tests {
             starttime: 0,
         };
         assert!(!is_ours(Path::new("/proc"), &id, 8080) || !cmdline_ours(Path::new("/proc"), 1, 8080));
+    }
+
+    #[test]
+    fn cmdline_model_is_the_minus_m_path() {
+        let mut cmd = b"llama-server\0-m\0".to_vec();
+        cmd.extend(b"/models/4b.gguf\0--port\0008080\0");
+        assert!(cmdline_bytes_have_model(
+            &cmd,
+            Path::new("/models/4b.gguf")
+        ));
+        assert!(!cmdline_bytes_have_model(
+            &cmd,
+            Path::new("/models/8b.gguf")
+        ));
+        assert!(!cmdline_bytes_have_model(&cmd, Path::new("")));
     }
 }
