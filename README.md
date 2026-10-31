@@ -1,4 +1,4 @@
-# Menagerie — the house steward
+# Menagerie — the steward 🐾
 
 Per-app loopback mouths (pixie `:8080`, kur `:8081`, imp `:8082`, magpie `:8091`),
 RAM/VRAM budget, `ensure` / `stop` / `set` / `models`. **Rust.** llama-server is
